@@ -66,22 +66,39 @@ def read_raw_adc_codes(rhd_path: str) -> np.ndarray:
 
 def build_chunks(codes: np.ndarray) -> list[bytes]:
     """
-    Input: Raw RHD Neural Data.
-    Output: FPGA Formated FIFO 128 Sample Chunks.
+    Input: Raw RHD Neural Data (uint16).
+    Output: FPGA Formated FIFO 128 Sample Chunks (uint32).
     FPGA Interface: channel_id[21:16] | adc_code[15:0].
     Endian: little-endian (Opal Kelly FrontPanel User's Manual).
     Manual: https://forums.opalkelly.com/t/pipein-endian-ness/1019
     Bug Fixed: channel-major.
     """
+
+    # 2D array: see manual link
+    # rows: active channels
+    # columns: samples (freq * duration)
     num_channels, num_samples = codes.shape
-    pad = (-num_samples) % SAMPLES_PER_CHUNK
+
+    # setup USB 3.0 128-sample mod chunks
+    pad = (-num_samples) % SAMPLES_PER_CHUNK # see OK manual
     if pad: # if not multiple of, pad rest with the ADC midpoint
         codes = np.pad(codes, ((0, 0), (0, pad)), constant_values=ADC_MIDPOINT)
-    ch_ids = (np.arange(num_channels, dtype=np.uint32) << 16)[:, None] # [21:16]
+
+    # uint16(num_channels) -> uint32 = uint16(num_channels) | uint16(000.00)
+    ch_ids = (np.arange(num_channels, dtype=np.uint32) << 16)[:, None] # shifted to [21:16]
+    # 2D: channel ID (rows) and sample position (columns)
+    
+    # 2D array (preserved)
+    # rows: active channels
+    # columns: 128 samples
     chunks = []
-    for c in range(codes.shape[1] // SAMPLES_PER_CHUNK):
+
+    for c in range(codes.shape[1] // SAMPLES_PER_CHUNK): # for all possible chunks
+        # form a column (sample i for all active channels)
+        # uint16(sample) -> uint32 = uint16(000.00) | uint16(sample)
         block = codes[:, c * SAMPLES_PER_CHUNK:(c + 1) * SAMPLES_PER_CHUNK].astype(np.uint32)
-        chunks.append((ch_ids | block).astype("<u4").tobytes()) # [15:0]
+        chunks.append((ch_ids | block).astype("<u4").tobytes()) #  # FPGA FIFO input
+
     return chunks
 
 
